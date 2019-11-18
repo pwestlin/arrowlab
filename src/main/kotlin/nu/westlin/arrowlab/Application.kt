@@ -40,12 +40,20 @@ data class HttpResponse(val body: String, val httpStatus: Int) {
     fun isError() = httpStatus >= 300
 }
 
+interface HttpPersonService {
+    fun getAll(): HttpResponse
+}
 
-class HttpPersonService(private val mapper: ObjectMapper) {
+class HttpPersonServiceHappyImpl(private val mapper: ObjectMapper): HttpPersonService {
 
-    fun getAll(): HttpResponse {
+    override fun getAll(): HttpResponse {
         return HttpResponse(mapper.writeValueAsString(simpsons + familyGuys), 200)
     }
+}
+
+class HttpPersonServiceErrorImpl(private val mapper: ObjectMapper): HttpPersonService {
+
+    override fun getAll(): HttpResponse = HttpResponse("", httpStatus = 500)
 }
 
 sealed class PersonError {
@@ -103,5 +111,10 @@ fun adultsPresentation(view: AdultsView, service: HttpPersonService, mapper: Obj
 
 fun main() {
     val mapper = jacksonObjectMapper()
-    adultsPresentation(AdultsView(), HttpPersonService(mapper), mapper).unsafeRunAsync { }
+    println("Happy case:")
+    adultsPresentation(AdultsView(), HttpPersonServiceHappyImpl(mapper), mapper).unsafeRunAsync { }
+
+    println()
+    println("Not so happy case:")
+    adultsPresentation(AdultsView(), HttpPersonServiceErrorImpl(mapper), mapper).unsafeRunAsync { }
 }
