@@ -1,9 +1,13 @@
+@file:Suppress("unused")
+
 package nu.westlin.arrowlab
 
 import arrow.core.Either
 import arrow.core.Left
 import arrow.core.Right
-import arrow.core.extensions.list.functorFilter.filter
+import arrow.core.flatMap
+import arrow.fx.IO
+import arrow.fx.handleError
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -12,6 +16,7 @@ import com.fasterxml.jackson.module.kotlin.readValue
 data class Person(val name: String, val age: Int) {
     @JsonIgnore
     fun isChild() = age < 18
+
     @JsonIgnore
     fun isAdult() = age >= 18
 }
@@ -48,17 +53,15 @@ sealed class PersonError {
     object UnknownServerError : PersonError()
 }
 
-fun getAllPersonsDataSource(service: HttpPersonService, mapper: ObjectMapper): Either<PersonError, List<Person>> {
-    return try {
+fun getAllPersonsDataSource(service: HttpPersonService, mapper: ObjectMapper): IO<Either<PersonError, List<Person>>> {
+    return IO {
         val response = service.getAll()
         when (response.httpStatus) {
-            200 -> Right(mapper.readValue(response.body))
+            200 -> Right(mapper.readValue<List<Person>>(response.body))
             404 -> Left(PersonError.NotFoundError)
             else -> Left(PersonError.UnknownServerError)
         }
-    } catch (e: Exception) {
-        Left(PersonError.UnknownServerError)
-    }
+    }.handleError { Left(PersonError.UnknownServerError) }
 }
 
 class AdultsView {
@@ -76,23 +79,28 @@ class AdultsView {
 
 }
 
-fun getAdultsUseCase(service: HttpPersonService, mapper: ObjectMapper):  Either<PersonError, List<Person>> {
-    // map:
-    // if left -> do nothing
-    // if right -> apply lambda,
-    return getAllPersonsDataSource(service, mapper).map { it.filter { person -> person.isAdult() } }
+fun getAdultsUseCase(service: HttpPersonService, mapper: ObjectMapper): IO<Either<PersonError, List<Person>>> {
+    return getAllPersonsDataSource(service, mapper).map { maybePersons ->
+        maybePersons.flatMap { heroes ->
+            Right(heroes.filter { person -> person.isAdult() })
+        }
+    }
 }
 
 fun adultsPresentation(view: AdultsView, service: HttpPersonService, mapper: ObjectMapper) {
-    getAdultsUseCase(service, mapper).fold(
-        { error ->
-            when(error) {
-                is PersonError.NotFoundError -> view.showNotFoundError()
-                is PersonError.UnknownServerError -> view.showUnknownServerError()
-            }
-        },
-        { view.showAdults(it)}
-    )
+    getAdultsUseCase(service, mapper).unsafeRunAsync {
+        it.map { maybeAdults ->
+            maybeAdults.fold(
+                { error ->
+                    when (error) {
+                        is PersonError.NotFoundError -> view.showNotFoundError()
+                        is PersonError.UnknownServerError -> view.showUnknownServerError()
+                    }
+                },
+                { adults -> view.showAdults(adults) }
+            )
+        }
+    }
 }
 
 fun main() {
