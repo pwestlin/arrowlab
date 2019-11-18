@@ -87,23 +87,21 @@ fun getAdultsUseCase(service: HttpPersonService, mapper: ObjectMapper): IO<Eithe
     }
 }
 
-fun adultsPresentation(view: AdultsView, service: HttpPersonService, mapper: ObjectMapper) {
-    getAdultsUseCase(service, mapper).unsafeRunAsync {
-        it.map { maybeAdults ->
-            maybeAdults.fold(
-                { error ->
-                    when (error) {
-                        is PersonError.NotFoundError -> view.showNotFoundError()
-                        is PersonError.UnknownServerError -> view.showUnknownServerError()
-                    }
-                },
-                { adults -> view.showAdults(adults) }
-            )
-        }
+fun adultsPresentation(view: AdultsView, service: HttpPersonService, mapper: ObjectMapper): IO<Unit> {
+    return getAdultsUseCase(service, mapper).map { maybeAdults ->
+        maybeAdults.fold(
+            { error ->
+                when (error) {
+                    is PersonError.NotFoundError -> view.showNotFoundError()
+                    is PersonError.UnknownServerError -> view.showUnknownServerError()
+                }
+            },
+            { adults -> view.showAdults(adults) }
+        )
     }
 }
 
 fun main() {
     val mapper = jacksonObjectMapper()
-    adultsPresentation(AdultsView(), HttpPersonService(mapper), mapper)
+    adultsPresentation(AdultsView(), HttpPersonService(mapper), mapper).unsafeRunAsync { }
 }
