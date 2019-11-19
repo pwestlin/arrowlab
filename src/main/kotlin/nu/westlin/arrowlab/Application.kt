@@ -3,6 +3,7 @@
 package nu.westlin.arrowlab
 
 import arrow.core.*
+import arrow.core.extensions.id.comonad.extract
 import arrow.mtl.Reader
 import arrow.mtl.ReaderApi
 import arrow.mtl.flatMap
@@ -123,9 +124,11 @@ fun adultsPresentation(): Reader<DependencyGraph, IO<Unit>> {
 fun main() {
     val mapper = jacksonObjectMapper()
     println("Happy case:")
-    adultsPresentation().run(DependencyGraph(AdultsView(), HttpPersonServiceHappyImpl(mapper), mapper)).fix().extract().unsafeRunAsync { }
+    val adultsPresentation = adultsPresentation()
+
+    adultsPresentation.run(DependencyGraph(AdultsView(), HttpPersonServiceHappyImpl(mapper), mapper)).extract().unsafeRunAsync { }
 
     println()
     println("Not so happy case:")
-    adultsPresentation().run(DependencyGraph(AdultsView(), HttpPersonServiceErrorImpl(mapper), mapper)).fix().extract().unsafeRunAsync { }
+    adultsPresentation.run(DependencyGraph(AdultsView(), HttpPersonServiceErrorImpl(mapper), mapper)).fix().extract().unsafeRunAsync { }
 }
