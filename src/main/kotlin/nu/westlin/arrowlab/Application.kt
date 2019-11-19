@@ -2,10 +2,11 @@
 
 package nu.westlin.arrowlab
 
-import arrow.core.Either
-import arrow.core.Left
-import arrow.core.Right
-import arrow.core.flatMap
+import arrow.core.*
+import arrow.mtl.Reader
+import arrow.mtl.ReaderApi
+import arrow.mtl.flatMap
+import arrow.mtl.map
 import arrow.fx.IO
 import arrow.fx.handleError
 import com.fasterxml.jackson.annotation.JsonIgnore
@@ -35,6 +36,8 @@ val chris = Person("Chris", 15)
 val stewie = Person("Stewie", 2)
 val familyGuys = listOf(peter, lois, meg, chris, stewie)
 
+data class DependencyGraph(val view: AdultsView, val service: HttpPersonService, val mapper: ObjectMapper)
+
 data class HttpResponse(val body: String, val httpStatus: Int) {
     fun isSuccessful() = httpStatus in (200..299)
     fun isError() = httpStatus >= 300
@@ -44,14 +47,14 @@ interface HttpPersonService {
     fun getAll(): HttpResponse
 }
 
-class HttpPersonServiceHappyImpl(private val mapper: ObjectMapper): HttpPersonService {
+class HttpPersonServiceHappyImpl(private val mapper: ObjectMapper) : HttpPersonService {
 
     override fun getAll(): HttpResponse {
         return HttpResponse(mapper.writeValueAsString(simpsons + familyGuys), 200)
     }
 }
 
-class HttpPersonServiceErrorImpl(private val mapper: ObjectMapper): HttpPersonService {
+class HttpPersonServiceErrorImpl(private val mapper: ObjectMapper) : HttpPersonService {
 
     override fun getAll(): HttpResponse = HttpResponse("", httpStatus = 500)
 }
@@ -61,15 +64,17 @@ sealed class PersonError {
     object UnknownServerError : PersonError()
 }
 
-fun getAllPersonsDataSource(service: HttpPersonService, mapper: ObjectMapper): IO<Either<PersonError, List<Person>>> {
-    return IO {
-        val response = service.getAll()
-        when (response.httpStatus) {
-            200 -> Right(mapper.readValue<List<Person>>(response.body))
-            404 -> Left(PersonError.NotFoundError)
-            else -> Left(PersonError.UnknownServerError)
-        }
-    }.handleError { Left(PersonError.UnknownServerError) }
+fun getAllPersonsDataSource(): Reader<DependencyGraph, IO<Either<PersonError, List<Person>>>> {
+    return ReaderApi.ask<DependencyGraph>().map { ctx ->
+        IO {
+            val response = ctx.service.getAll()
+            when (response.httpStatus) {
+                200 -> Right(ctx.mapper.readValue<List<Person>>(response.body))
+                404 -> Left(PersonError.NotFoundError)
+                else -> Left(PersonError.UnknownServerError)
+            }
+        }.handleError { Left(PersonError.UnknownServerError) }
+    }
 }
 
 class AdultsView {
@@ -87,34 +92,40 @@ class AdultsView {
 
 }
 
-fun getAdultsUseCase(service: HttpPersonService, mapper: ObjectMapper): IO<Either<PersonError, List<Person>>> {
-    return getAllPersonsDataSource(service, mapper).map { maybePersons ->
-        maybePersons.flatMap { heroes ->
-            Right(heroes.filter { person -> person.isAdult() })
+fun getAdultsUseCase(): Reader<DependencyGraph, IO<Either<PersonError, List<Person>>>> {
+    return getAllPersonsDataSource().map { io ->
+        io.map { maybePersons ->
+            maybePersons.flatMap { heroes ->
+                Right(heroes.filter { person -> person.isAdult() })
+            }
         }
     }
 }
 
-fun adultsPresentation(view: AdultsView, service: HttpPersonService, mapper: ObjectMapper): IO<Unit> {
-    return getAdultsUseCase(service, mapper).map { maybeAdults ->
-        maybeAdults.fold(
-            { error ->
-                when (error) {
-                    is PersonError.NotFoundError -> view.showNotFoundError()
-                    is PersonError.UnknownServerError -> view.showUnknownServerError()
-                }
-            },
-            { adults -> view.showAdults(adults) }
-        )
+fun adultsPresentation(): Reader<DependencyGraph, IO<Unit>> {
+    return ReaderApi.ask<DependencyGraph>().flatMap { ctx ->
+        getAdultsUseCase().map { io ->
+            io.map { maybeAdults ->
+                maybeAdults.fold(
+                    { error ->
+                        when (error) {
+                            is PersonError.NotFoundError -> ctx.view.showNotFoundError()
+                            is PersonError.UnknownServerError -> ctx.view.showUnknownServerError()
+                        }
+                    },
+                    { adults -> ctx.view.showAdults(adults) }
+                )
+            }
+        }
     }
 }
 
 fun main() {
     val mapper = jacksonObjectMapper()
     println("Happy case:")
-    adultsPresentation(AdultsView(), HttpPersonServiceHappyImpl(mapper), mapper).unsafeRunAsync { }
+    adultsPresentation().run(DependencyGraph(AdultsView(), HttpPersonServiceHappyImpl(mapper), mapper)).fix().extract().unsafeRunAsync { }
 
     println()
     println("Not so happy case:")
-    adultsPresentation(AdultsView(), HttpPersonServiceErrorImpl(mapper), mapper).unsafeRunAsync { }
+    adultsPresentation().run(DependencyGraph(AdultsView(), HttpPersonServiceErrorImpl(mapper), mapper)).fix().extract().unsafeRunAsync { }
 }
